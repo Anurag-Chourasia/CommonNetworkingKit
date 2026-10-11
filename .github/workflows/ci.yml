@@ -1,0 +1,65 @@
+name: Swift package
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # Xcode 27 runner is arm64 and currently in public preview.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record and verify toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR" || { echo "Required Xcode 27.0 is unavailable"; exit 1; }
+          xcodebuild -version | tee "$RUNNER_TEMP/xcode-version.txt"
+          xcrun swiftc --version | tee "$RUNNER_TEMP/swift-version.txt"
+          grep -Fxq 'Xcode 27.0' "$RUNNER_TEMP/xcode-version.txt"
+          grep -Fxq 'Build version 27A266a' "$RUNNER_TEMP/xcode-version.txt"
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          grep -Eq 'Apple Swift version 6\.4([. ]|$)' "$RUNNER_TEMP/swift-version.txt"
+
+      - name: Resolve package
+        run: xcrun swift package resolve
+
+      - name: Build host validation target with strict concurrency
+        run: >-
+          xcrun swift build --triple arm64-apple-macosx14.0
+          -Xswiftc -strict-concurrency=complete
+          -Xswiftc -warnings-as-errors
+
+      - name: Run unit tests with strict concurrency
+        run: >-
+          xcrun swift test --triple arm64-apple-macosx14.0
+          -Xswiftc -strict-concurrency=complete
+          -Xswiftc -warnings-as-errors
+
+      - name: Build iOS Simulator product
+        run: >-
+          xcodebuild -scheme CommonNetworking
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/CommonNetworking"
+          SDKROOT=iphonesimulator
+          CODE_SIGNING_ALLOWED=NO
+          SWIFT_STRICT_CONCURRENCY=complete
+          SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+          build
