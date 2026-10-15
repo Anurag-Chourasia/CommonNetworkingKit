@@ -4,7 +4,7 @@ A small Foundation-only Swift package for HTTP transport and optional JSON decod
 
 **iOS 16.6+ · Manifest tools 5.9 · Validated with Xcode 27.0 / Swift 6.4 · MIT**
 
-MyTV currently consumes this package through a local app-owned adapter. ShowBook is not integrated. Remote publication and GitHub Actions execution are pending.
+MyTV and ShowBook consume this package through app-owned adapters.
 
 ## Install
 
@@ -14,11 +14,11 @@ In Xcode, choose **File → Add Package Dependencies** and enter:
 https://github.com/Anurag-Chourasia/CommonNetworking.git
 ```
 
-After the `1.0.0` release is published, select **Exact Version: 1.0.0** to reproduce that release, then add the `CommonNetworking` library product to your app target. Commit the app's `Package.resolved` file. For a consuming Swift package:
+Select **Exact Version: 1.1.0** to reproduce this release, then add the `CommonNetworking` library product to your app target. Commit the app's `Package.resolved` file. For a consuming Swift package:
 
 ```swift
 // In Package.swift:
-.package(url: "https://github.com/Anurag-Chourasia/CommonNetworking.git", exact: "1.0.0")
+.package(url: "https://github.com/Anurag-Chourasia/CommonNetworking.git", exact: "1.1.0")
 // In the consuming target's dependencies:
 .product(name: "CommonNetworking", package: "CommonNetworking")
 ```
@@ -60,7 +60,7 @@ The caller owns session configuration and lifetime. `CommonNetworking` does not 
 
 | API | Behaviour |
 | --- | --- |
-| `HTTPClient(session:)` | Concrete transport using the supplied session; defaults to `URLSession.shared`. |
+| `HTTPClient(session:logger:)` | Concrete transport using the supplied session; defaults to `URLSession.shared`. |
 | `send(_:)` | Executes the supplied `URLRequest` and returns response bytes plus HTTP metadata for every HTTP status, including non-2xx and empty bodies. |
 | `request(_:as:decoder:)` | Accepts only 2xx statuses, rejects a zero-byte successful body, then decodes JSON. The decoder is caller-configurable. |
 | `HTTPResponse` | Retains `Data` and the full `HTTPURLResponse`, including status, headers and final URL. |
@@ -68,7 +68,7 @@ The caller owns session configuration and lifetime. `CommonNetworking` does not 
 
 `send` does not reject an HTTP 4xx or 5xx response; the caller chooses how to interpret the status and body. `request` performs status validation before empty-body validation and decoding. A malformed 500 therefore produces an unsuccessful-status error rather than a decoding error. A 204 or any other empty successful response can be consumed through `send`; typed decoding reports `emptyBody`.
 
-JSON decoding errors and unrelated transport errors propagate without generic wrapping. A transport `URLError.cancelled` becomes `CancellationError`; other `URLError` values are preserved. URLSession redirect, cookie, cache and other session behaviors remain under the injected session's configuration. There are no automatic retries, authentication handlers, caching rules or logging policies.
+JSON decoding errors and unrelated transport errors propagate without generic wrapping. A transport `URLError.cancelled` becomes `CancellationError`; other `URLError` values are preserved. URLSession redirect, cookie, cache and other session behaviors remain under the injected session's configuration. There are no automatic retries, authentication handlers or caching rules. Logging is opt-in and does not change transport or decoding behavior.
 
 ## Raw response handling
 
@@ -135,3 +135,29 @@ Tests use an injected `URLProtocol` fixture and local synthetic responses. They 
 ## License
 
 CommonNetworking is licensed under the [MIT License](LICENSE), copyright Anurag Chourasia.
+
+## Complete HTTP diagnostics
+
+```swift
+#if DEBUG
+let logger: HTTPLogger? = .console
+#else
+let logger: HTTPLogger? = nil
+#endif
+let client = HTTPClient(session: session, logger: logger)
+```
+
+Each exchange prints HTTP REQUEST followed by HTTP RESPONSE (or HTTP ERROR), with a shared full UUID, method, redacted URL, headers and body. Responses add final URL, HTTP status and elapsed transport time in milliseconds. Non-2xx and non-HTTP response bodies are logged before validation. Cancellation and transport errors retain their existing thrown semantics. Error descriptions/userInfo are omitted because they can contain credentials.
+
+JSON is pretty-printed with sorted keys. Headers, URL user/password/query/fragment, JSON keys at any nesting level, and URL-encoded form keys are redacted for common credentials and email. Key matching is case-insensitive and ignores punctuation. Add application-specific sensitive keys without removing defaults:
+
+```swift
+let logger = HTTPLogger(additionalSensitiveKeys: ["accountNumber", "X-Custom-Secret"]) { record in
+    // Send the COMPLETE record to your thread-safe file or diagnostics sink.
+    // A file sink should report write failures and define its retention policy.
+}
+```
+
+There is **no body-size cutoff**. The console sink serializes complete events under a lock and emits Unicode-safe chunks without dropping or shortening content. A custom sink receives each complete record in one call and must support concurrent callers. Xcode/terminal retention and downstream log collectors can still discard output; the package cannot guarantee their retention. Logging large payloads requires memory and I/O proportional to payload size and is deliberately opt-in (nil by default).
+
+Empty bodies are marked empty. UTF-8 non-JSON bodies are emitted as text; other bytes are emitted as full Base64. Key-based redaction cannot identify secrets inside arbitrary text, malformed JSON, binary, multipart data, or URL path segments: use a suitable custom diagnostics policy for those endpoints. Request body streams are never consumed, and are clearly marked unavailable. Logged request headers/body are from the caller's URLRequest; URLSession-added cookies/headers, redirect-hop bodies, and internally streamed bytes are not captured. The final response data and headers are captured in full, subject to redaction. No request, response, or sensitive value is modified on the wire.

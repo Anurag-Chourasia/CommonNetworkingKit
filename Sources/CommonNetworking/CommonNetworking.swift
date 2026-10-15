@@ -25,22 +25,30 @@ public enum HTTPClientError: Error {
 /// Foundation transport with optional JSON decoding. Owns neither endpoints nor app policy.
 public struct HTTPClient: Sendable {
     private let session: URLSession
+    private let logger: HTTPLogger?
 
     /// The caller owns session configuration and lifetime.
-    public init(session: URLSession = .shared) {
+    public init(session: URLSession = .shared, logger: HTTPLogger? = nil) {
         self.session = session
+        self.logger = logger
     }
 
     /// Returns bytes and metadata for every HTTP status, including non-2xx and empty bodies.
     /// Converts URLError.cancelled to CancellationError; other transport errors are unchanged.
     public func send(_ request: URLRequest) async throws -> HTTPResponse {
+        let id = logger == nil ? "" : UUID().uuidString
+        logger?.request(request, id: id)
+        let start = DispatchTime.now().uptimeNanoseconds
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
-        } catch let error as URLError where error.code == .cancelled {
-            throw CancellationError()
+        } catch {
+            logger?.failure(error, request: request, id: id, milliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            if let error = error as? URLError, error.code == .cancelled { throw CancellationError() }
+            throw error
         }
+        logger?.response(response, data: data, request: request, id: id, milliseconds: Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
         guard let response = response as? HTTPURLResponse else {
             throw HTTPClientError.nonHTTPResponse
         }
