@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "CommonNetworkingKit",
-    platforms: [.iOS("16.6"), .macOS(.v14)],
+    platforms: [.iOS(.v16), .macOS(.v14)],
     products: [
         .library(name: "CommonNetworkingKit", targets: ["CommonNetworkingKit"]),
         .library(name: "CommonNetworking", targets: ["CommonNetworking"])

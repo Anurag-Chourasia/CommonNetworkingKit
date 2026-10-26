@@ -12,12 +12,19 @@ private final class LoggingProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        if request.url!.path == "/offline" {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        if url.path == "/offline" {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 503, httpVersion: nil,
-                                       headerFields: ["Content-Type": "application/json", "Set-Cookie": "secret-cookie"])!
+        guard let response = HTTPURLResponse(url: url, statusCode: 503, httpVersion: nil,
+                                             headerFields: ["Content-Type": "application/json", "Set-Cookie": "secret-cookie"]) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
+            return
+        }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(#"{"success":false,"token":"secret-token","message":"try again"}"#.utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -51,8 +58,9 @@ final class HTTPLoggerTests: XCTestCase {
         let logger = HTTPLogger(output: records.append)
         let payload = String(repeating: "abc🔒हिंदी\n", count: 200_000) + "END-OF-BODY"
         let data = try JSONSerialization.data(withJSONObject: ["payload": payload])
-        let request = URLRequest(url: URL(string: "https://example.com")!)
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        let url = try XCTUnwrap(URL(string: "https://example.com"))
+        let request = URLRequest(url: url)
+        let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil))
         logger.response(response, data: data, request: request, id: "big", milliseconds: 342)
         let record = try XCTUnwrap(records.values.first)
         let body = try XCTUnwrap(record.components(separatedBy: "Response Body:\n").last?.components(separatedBy: "\n==================================").first)
@@ -99,7 +107,11 @@ final class HTTPLoggerTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<12 {
                 group.addTask {
-                    let result = try await client.send(URLRequest(url: URL(string: "https://example.com/\(index)")!))
+                    guard let url = URL(string: "https://example.com/\(index)") else {
+                        XCTFail("Invalid test URL")
+                        return
+                    }
+                    let result = try await client.send(URLRequest(url: url))
                     XCTAssertEqual(result.statusCode, 503)
                     XCTAssertTrue(String(decoding: result.data, as: UTF8.self).contains("secret-token"))
                 }
@@ -108,7 +120,7 @@ final class HTTPLoggerTests: XCTestCase {
         }
         XCTAssertEqual(records.values.count, 24)
         let pairs = Dictionary(grouping: records.values) { record in
-            record.components(separatedBy: "\n").first { $0.hasPrefix("Request ID:") }!
+            record.components(separatedBy: "\n").first { $0.hasPrefix("Request ID:") } ?? ""
         }
         XCTAssertEqual(pairs.count, 12)
         for pair in pairs.values {

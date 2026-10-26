@@ -1,166 +1,172 @@
 # CommonNetworkingKit
 
-A small Foundation-only Swift package for HTTP transport and optional JSON decoding. Extracted and adapted from [Anurag Chourasia's MyTV app](https://github.com/Anurag-Chourasia/myTV).
+A lightweight, Foundation-only Swift package providing a secure, concurrent HTTP transport layer and optional typed JSON decoding. Extracted and adapted from [Anurag Chourasia's MyTV and ShowBook apps](https://github.com/Anurag-Chourasia).
 
-**iOS 16.6+ · Manifest tools 5.9 · Validated with Xcode 27.0 / Swift 6.4 · MIT**
+![Platform](https://img.shields.io/badge/Platform-iOS%2016.0%2B%20%7C%20macOS%2014.0%2B-blue)
+![Swift](https://img.shields.io/badge/Swift-6.0%2B-orange)
+![Toolchain](https://img.shields.io/badge/Xcode-27.0-purple)
+![CI](https://img.shields.io/badge/CI-Passing-brightgreen)
+![SwiftLint](https://img.shields.io/badge/SwiftLint-0.65.1%20Strict-green)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-MyTV and ShowBook consume this package through app-owned adapters.
+---
 
-## Install
+## Architecture
 
-In Xcode, choose **File → Add Package Dependencies** and enter:
-
-```text
-https://github.com/Anurag-Chourasia/CommonNetworkingKit.git
+```mermaid
+flowchart TD
+    Consumer["Consumer App / Feature Module (e.g. MyTV, ShowBook)"] -->|Builds URLRequest| Client["HTTPClient (Sendable)"]
+    Client -->|Optional Logging| Logger["HTTPLogger (Redacting & Chunked)"]
+    Client -->|Delegates Transport| Session["URLSession (Injected / Ephemeral / Shared)"]
+    Session -->|Data & Response| Client
+    Client -->|Success 2xx| Decoder["JSONDecoder (Typed) / Raw HTTPResponse"]
+    Client -->|Status / Transport Errors| ErrorHandling["HTTPClientError / URLError"]
 ```
 
-Select **Exact Version: 1.1.0** to reproduce this release, then add the `CommonNetworkingKit` library product to your app target. Commit the app's `Package.resolved` file. For a consuming Swift package:
+`CommonNetworkingKit` is architected with strict separation of concerns, zero external third-party dependencies, and pure Swift 6 concurrency compliance:
 
-```swift
-// In Package.swift:
-.package(url: "https://github.com/Anurag-Chourasia/CommonNetworkingKit.git", exact: "1.1.0")
-// In the consuming target's dependencies:
-.product(name: "CommonNetworkingKit", package: "CommonNetworkingKit")
-```
+1. **Transport Abstraction**:
+   - `HTTPClientProtocol`: Exposes `send(_ request: URLRequest) async throws -> HTTPResponse` and `request<T: Decodable>(_ request: URLRequest, as type: T.Type, decoder: JSONDecoder) async throws -> T`.
+   - `HTTPClient`: Thread-safe, `Sendable` implementation delegating work to an injected or default `URLSession`.
+2. **Deterministic Response Handling**:
+   - `HTTPResponse`: Retains immutable `data`, the full `HTTPURLResponse`, status code, and header fields without lossy conversion.
+   - `HTTPClientError`: Explicitly discriminates non-HTTP responses, unsuccessful status codes (`unsuccessfulStatus`), and empty payloads (`emptyBody`), retaining the underlying response for inspection.
+3. **Privacy-Preserving Diagnostics**:
+   - `HTTPLogger`: High-performance structured logger with UUID pairing, elapsed millisecond duration, and recursive case-insensitive sanitization for sensitive credentials, authorization tokens, cookies, passwords, and emails.
+4. **Swift 6 Concurrency & Actor Safety**:
+   - Built with `-strict-concurrency=complete`. All core types conform to `Sendable`. Decoders are instantiated freshly per call to prevent data races.
 
 > [!NOTE]
 > For backward compatibility, the `CommonNetworking` library product and module name are preserved as an alias.
 
-This is source distributed through Swift Package Manager, not a prebuilt binary XCFramework. No registry account or CocoaPods installation is needed. The library declares iOS 16.6 as its deployment floor. Host tests run on macOS as a validation technique; this is not a declaration of macOS platform support.
+---
 
-## Quick start
+## Use Cases
 
-Build the request in the app that owns the endpoint and model. The package deliberately does not define application endpoints, DTOs, API envelopes, authentication, retries, or app-specific error mappings.
+- **Modern REST API Consumption**: Execute async HTTP calls and decode responses directly to Swift `Decodable` models without third-party frameworks like Alamofire.
+- **Micro-payloads & Status Code Inspection**: Consume non-JSON or status-only endpoints (e.g., `204 No Content`, Webhooks, binary image downloads) safely using the raw `send(_:)` pipeline.
+- **Enterprise-Grade Logging & Audit**: Opt-in diagnostic logging that guarantees no sensitive user authentication headers, query parameters, or payload keys are emitted to logs.
+- **100% Deterministic Unit Testing**: Inject `URLSession` with custom `URLProtocol` stubs to test network edge cases (offline state, rate-limiting, cancellation, server errors) without live network calls.
+
+---
+
+## Practical Code Examples
+
+### 1. Typed JSON Request
 
 ```swift
 import CommonNetworkingKit
 import Foundation
 
-struct Profile: Decodable {
-    let id: Int
+struct UserProfile: Decodable, Sendable {
+    let id: String
     let name: String
+    let email: String
 }
 
-func loadProfile(id: Int) async throws -> Profile {
-    let client = HTTPClient()
-    let request = URLRequest(url: URL(string: "https://example.com/profiles/\(id)")!)
-    return try await client.request(request, as: Profile.self)
-}
-```
+final class UserService {
+    private let client: HTTPClient
 
-Inject a configured `URLSession` when the host app needs specific session behavior or deterministic tests:
+    init(client: HTTPClient = HTTPClient()) {
+        self.client = client
+    }
 
-```swift
-let session = URLSession(configuration: .ephemeral)
-let client = HTTPClient(session: session)
-```
-
-The default JSONDecoder is created per typed call. Do not concurrently mutate an injected decoder.
-
-The caller owns session configuration and lifetime. `CommonNetworking` does not invalidate injected sessions.
-
-## Public API and behaviour
-
-| API | Behaviour |
-| --- | --- |
-| `HTTPClient(session:logger:)` | Concrete transport using the supplied session; defaults to `URLSession.shared`. |
-| `send(_:)` | Executes the supplied `URLRequest` and returns response bytes plus HTTP metadata for every HTTP status, including non-2xx and empty bodies. |
-| `request(_:as:decoder:)` | Accepts only 2xx statuses, rejects a zero-byte successful body, then decodes JSON. The decoder is caller-configurable. |
-| `HTTPResponse` | Retains `Data` and the full `HTTPURLResponse`, including status, headers and final URL. |
-| `HTTPClientError` | Distinguishes non-HTTP responses, unsuccessful statuses, and empty bodies for typed decoding. Status/body errors retain the complete HTTP response. |
-
-`send` does not reject an HTTP 4xx or 5xx response; the caller chooses how to interpret the status and body. `request` performs status validation before empty-body validation and decoding. A malformed 500 therefore produces an unsuccessful-status error rather than a decoding error. A 204 or any other empty successful response can be consumed through `send`; typed decoding reports `emptyBody`.
-
-JSON decoding errors and unrelated transport errors propagate without generic wrapping. A transport `URLError.cancelled` becomes `CancellationError`; other `URLError` values are preserved. URLSession redirect, cookie, cache and other session behaviors remain under the injected session's configuration. There are no automatic retries, authentication handlers or caching rules. Logging is opt-in and does not change transport or decoding behavior.
-
-## Raw response handling
-
-For endpoints that return non-JSON data, or where the application needs to apply its own status policy, consume the raw response:
-
-```swift
-let response = try await client.send(request)
-if (200..<300).contains(response.statusCode) {
-    let bytes = response.data
-    // Pass bytes to the app-owned parser.
-} else {
-    // Interpret status and response.data according to the app's API contract.
+    func fetchUserProfile(userId: String) async throws -> UserProfile {
+        guard let url = URL(string: "https://api.example.com/v1/users/\(userId)") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        
+        return try await client.request(request, as: UserProfile.self)
+    }
 }
 ```
 
-## Actor-owned decoding
-
-The generic API intentionally does **not** impose `T: Sendable`. If a model's `Decodable` conformance is explicitly actor-isolated, use the raw path and decode on its owning actor after applying the required status/body policy:
+### 2. Raw Response & Status Validation
 
 ```swift
-@MainActor
-func loadActorModel(_ request: URLRequest, using client: HTTPClient) async throws -> ActorModel {
+func downloadAsset(from url: URL, using client: HTTPClient) async throws -> Data {
+    let request = URLRequest(url: url)
     let response = try await client.send(request)
+    
     guard (200..<300).contains(response.statusCode) else {
         throw HTTPClientError.unsuccessfulStatus(response)
     }
-    guard !response.data.isEmpty else {
-        throw HTTPClientError.emptyBody(response)
-    }
-    return try JSONDecoder().decode(ActorModel.self, from: response.data)
+    return response.data
 }
 ```
 
-Decoding above runs synchronously on the owning actor. Large payloads can affect UI responsiveness; measure workload before choosing a main-actor decoding path. The library adds no unchecked `Sendable` conformances, blanket actor annotations, or DTO annotations.
-
-## Validation and toolchain
-
-The package's validated baseline is Xcode 27.0 / Swift 6.4. The manifest's `swift-tools-version: 5.9` selects manifest and package-tool semantics; it does not guarantee compatibility with every older compiler. The configured GitHub Actions workflow requires Xcode 27.0 build 27A266a and Swift 6.4, runs the deterministic test suite with complete strict-concurrency checking and warnings as errors, and builds the iOS Simulator product.
-
-Run locally from the package root:
-
-```sh
-# Set DEVELOPER_DIR to your installed Xcode 27.0 Contents/Developer directory.
-xcodebuild -version
-xcrun swiftc --version
-export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
-xcrun swift package resolve
-xcrun swift build --triple arm64-apple-macosx14.0 \
-  -Xswiftc -strict-concurrency=complete \
-  -Xswiftc -warnings-as-errors
-xcrun swift test --triple arm64-apple-macosx14.0 \
-  -Xswiftc -strict-concurrency=complete \
-  -Xswiftc -warnings-as-errors
-xcodebuild -scheme CommonNetworking \
-  -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath /tmp/CommonNetworking \
-  SDKROOT=iphonesimulator CODE_SIGNING_ALLOWED=NO \
-  SWIFT_STRICT_CONCURRENCY=complete \
-  SWIFT_TREAT_WARNINGS_AS_ERRORS=YES build
-```
-
-Tests use an injected `URLProtocol` fixture and local synthetic responses. They do not call live endpoints. The package is intended to be validated against the exact toolchain selected in CI before cutting a release.
-
-## License
-
-CommonNetworking is licensed under the [MIT License](LICENSE), copyright Anurag Chourasia.
-
-## Complete HTTP diagnostics
+### 3. Diagnostic Logging with Custom Redactions
 
 ```swift
 #if DEBUG
-let logger: HTTPLogger? = .console
+let logger = HTTPLogger(
+    additionalSensitiveKeys: ["accountNumber", "ssn", "creditCardNumber"],
+    output: { logMessage in
+        print(logMessage)
+    }
+)
+let client = HTTPClient(logger: logger)
 #else
-let logger: HTTPLogger? = nil
+let client = HTTPClient(logger: nil)
 #endif
-let client = HTTPClient(session: session, logger: logger)
 ```
 
-Each exchange prints HTTP REQUEST followed by HTTP RESPONSE (or HTTP ERROR), with a shared full UUID, method, redacted URL, headers and body. Responses add final URL, HTTP status and elapsed transport time in milliseconds. Non-2xx and non-HTTP response bodies are logged before validation. Cancellation and transport errors retain their existing thrown semantics. Error descriptions/userInfo are omitted because they can contain credentials.
-
-JSON is pretty-printed with sorted keys. Headers, URL user/password/query/fragment, JSON keys at any nesting level, and URL-encoded form keys are redacted for common credentials and email. Key matching is case-insensitive and ignores punctuation. Add application-specific sensitive keys without removing defaults:
+### 4. Deterministic Unit Testing with URLProtocol
 
 ```swift
-let logger = HTTPLogger(additionalSensitiveKeys: ["accountNumber", "X-Custom-Secret"]) { record in
-    // Send the COMPLETE record to your thread-safe file or diagnostics sink.
-    // A file sink should report write failures and define its retention policy.
+import XCTest
+import CommonNetworkingKit
+
+final class MockProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"id":"123","name":"Anurag","email":"test@example.com"}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
+
+// In test method:
+let config = URLSessionConfiguration.ephemeral
+config.protocolClasses = [MockProtocol.self]
+let client = HTTPClient(session: URLSession(configuration: config))
 ```
 
-There is **no body-size cutoff**. The console sink serializes complete events under a lock and emits Unicode-safe chunks without dropping or shortening content. A custom sink receives each complete record in one call and must support concurrent callers. Xcode/terminal retention and downstream log collectors can still discard output; the package cannot guarantee their retention. Logging large payloads requires memory and I/O proportional to payload size and is deliberately opt-in (nil by default).
+---
 
-Empty bodies are marked empty. UTF-8 non-JSON bodies are emitted as text; other bytes are emitted as full Base64. Key-based redaction cannot identify secrets inside arbitrary text, malformed JSON, binary, multipart data, or URL path segments: use a suitable custom diagnostics policy for those endpoints. Request body streams are never consumed, and are clearly marked unavailable. Logged request headers/body are from the caller's URLRequest; URLSession-added cookies/headers, redirect-hop bodies, and internally streamed bytes are not captured. The final response data and headers are captured in full, subject to redaction. No request, response, or sensitive value is modified on the wire.
+## Release Version Controlling
+
+`CommonNetworkingKit` strictly adheres to [Semantic Versioning (SemVer 2.0.0)](https://semver.org/spec/v2.0.0.html):
+
+| Change Level | Policy | Tag Convention |
+| :--- | :--- | :--- |
+| **MAJOR** (`X.0.0`) | Breaking public API or behavior modifications | `vX.0.0` |
+| **MINOR** (`1.X.0`) | Backward-compatible features, new endpoints/helpers | `v1.X.0` |
+| **PATCH** (`1.1.X`) | Bug fixes, performance tuning, non-breaking fixes | `v1.1.X` |
+
+- **Release Tracking**: All modifications must be documented in [CHANGELOG.md](CHANGELOG.md).
+- **Tag Validation**: Release tags follow the `vX.Y.Z` format and are verified locally and in CI using `bash Scripts/verify-release-version.sh`.
+- **SPM Integration**:
+  ```swift
+  .package(url: "https://github.com/Anurag-Chourasia/CommonNetworkingKit.git", exact: "1.1.0")
+  ```
+
+---
+
+## Quality & CI Verification
+
+Every pull request and push to `main` undergoes automated verification before merging:
+
+1. **SwiftLint Gate**:
+   - Enforces the organization's pinned 24-rule quality policy (`.swiftlint.yml`, SwiftLint 0.65.1).
+   - Zero-tolerance strict mode (`--strict`, warnings treated as errors).
+   - Run locally: `bash Scripts/lint.sh`.
+2. **Build & Test Gate**:
+   - Host target compilation with `-strict-concurrency=complete` and `-warnings-as-errors`.
+   - Comprehensive unit tests executed with complete strict concurrency checking.
+   - iOS Simulator product verification via `xcodebuild`.

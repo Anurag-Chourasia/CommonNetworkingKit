@@ -8,7 +8,11 @@ private final class StubProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        let path = request.url!.path
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let path = url.path
         if path == "/hold" {
             (Self.property(forKey: "started", in: request) as? XCTestExpectation)?.fulfill()
             return
@@ -22,12 +26,13 @@ private final class StubProtocol: URLProtocol {
         let response: URLResponse
         let body: Data
         if path == "/non-http" {
-            response = URLResponse(url: request.url!, mimeType: "application/json",
+            response = URLResponse(url: url, mimeType: "application/json",
                                    expectedContentLength: 2, textEncodingName: nil)
             body = Data("{}".utf8)
-        } else if let status = Int(path.dropFirst()) {
-            response = HTTPURLResponse(url: request.url!, statusCode: status,
-                httpVersion: "HTTP/1.1", headerFields: ["X-Fixture": "retained"])!
+        } else if let status = Int(path.dropFirst()),
+                  let httpResponse = HTTPURLResponse(url: url, statusCode: status,
+                                                     httpVersion: "HTTP/1.1", headerFields: ["X-Fixture": "retained"]) {
+            response = httpResponse
             switch request.value(forHTTPHeaderField: "X-Body") {
             case "empty": body = Data()
             case "invalid": body = Data("not-json".utf8)
@@ -64,7 +69,10 @@ final class HTTPClientTests: XCTestCase {
         return URLSession(configuration: config)
     }
     private func request(_ path: String, body: String? = nil) -> URLRequest {
-        var request = URLRequest(url: URL(string: "https://fixture.invalid/\(path)")!)
+        guard let url = URL(string: "https://fixture.invalid/\(path)") else {
+            fatalError("Invalid fixture URL for path: \(path)")
+        }
+        var request = URLRequest(url: url)
         request.setValue(body, forHTTPHeaderField: "X-Body")
         return request
     }
@@ -180,13 +188,18 @@ final class HTTPClientTests: XCTestCase {
         let client = HTTPClient(session: session)
         for typed in [false, true] {
             do {
-                if typed { let _ = try await client.request(request("offline"), as: Model.self) }
-                else { _ = try await client.send(request("offline")) }
+                if typed {
+                    _ = try await client.request(request("offline"), as: Model.self)
+                } else {
+                    _ = try await client.send(request("offline"))
+                }
                 XCTFail("Expected offline error")
             } catch let error as URLError {
                 XCTAssertEqual(error.code, .notConnectedToInternet)
                 XCTAssertEqual(error.userInfo["fixture"] as? String, "preserved")
-            } catch { XCTFail("Unexpected error: \(error)") }
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
         }
     }
 
@@ -195,10 +208,16 @@ final class HTTPClientTests: XCTestCase {
         let client = HTTPClient(session: session)
         for typed in [false, true] {
             do {
-                if typed { let _ = try await client.request(request("cancelled"), as: Model.self) }
-                else { _ = try await client.send(request("cancelled")) }
+                if typed {
+                    _ = try await client.request(request("cancelled"), as: Model.self)
+                } else {
+                    _ = try await client.send(request("cancelled"))
+                }
                 XCTFail("Expected cancellation")
-            } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+            } catch is CancellationError {
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
         }
     }
 
@@ -207,15 +226,23 @@ final class HTTPClientTests: XCTestCase {
         let client = HTTPClient(session: session)
         let started = expectation(description: "started")
         let stopped = expectation(description: "stopped")
-        let input = NSMutableURLRequest(url: URL(string: "https://fixture.invalid/hold")!)
+        guard let url = URL(string: "https://fixture.invalid/hold") else {
+            fatalError("Invalid fixture URL")
+        }
+        let input = NSMutableURLRequest(url: url)
         URLProtocol.setProperty(started, forKey: "started", in: input)
         URLProtocol.setProperty(stopped, forKey: "stopped", in: input)
         let value = input as URLRequest
         let task = Task { try await client.send(value) }
         await fulfillment(of: [started], timeout: 5)
         task.cancel()
-        do { _ = try await task.value; XCTFail("Expected cancellation") }
-        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
         await fulfillment(of: [stopped], timeout: 5)
     }
 }

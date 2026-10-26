@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +16,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  swiftlint:
+    name: SwiftLint
+    runs-on: xcode-27
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned SwiftLint
+        run: bash Scripts/install-swiftlint.sh "$RUNNER_TEMP/swiftlint"
+      - name: Enforce SwiftLint rules
+        env:
+          SWIFTLINT_BIN: ${{ runner.temp }}/swiftlint/swiftlint
+        run: bash Scripts/lint.sh
+
   build-and-test:
+    name: Build & Test
+    needs: [swiftlint]
     # Xcode 27 runner is arm64 and currently in public preview.
     runs-on: xcode-27
     timeout-minutes: 30
