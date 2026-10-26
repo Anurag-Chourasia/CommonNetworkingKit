@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import CommonNetworking
+import CommonNetworkingKit
 
 // Every request is intercepted, including unknown routes. No shared mutable fixture state.
 private final class StubProtocol: URLProtocol {

@@ -1,4 +1,5 @@
 import Foundation
+import os.log
 
 /// Opt-in diagnostics. Receives complete, redacted records with no body-size limit.
 /// Custom sinks must be thread-safe; requests may finish concurrently.

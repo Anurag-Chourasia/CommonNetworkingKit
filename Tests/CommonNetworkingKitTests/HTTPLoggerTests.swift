@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import CommonNetworking
+@testable import CommonNetworkingKit
 
 private final class Records: @unchecked Sendable {
     private let lock = NSLock()

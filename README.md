@@ -1,4 +1,4 @@
-# CommonNetworking
+# CommonNetworkingKit
 
 A small Foundation-only Swift package for HTTP transport and optional JSON decoding. Extracted and adapted from [Anurag Chourasia's MyTV app](https://github.com/Anurag-Chourasia/myTV).
 
@@ -11,17 +11,20 @@ MyTV and ShowBook consume this package through app-owned adapters.
 In Xcode, choose **File → Add Package Dependencies** and enter:
 
 ```text
-https://github.com/Anurag-Chourasia/CommonNetworking.git
+https://github.com/Anurag-Chourasia/CommonNetworkingKit.git
 ```
 
-Select **Exact Version: 1.1.0** to reproduce this release, then add the `CommonNetworking` library product to your app target. Commit the app's `Package.resolved` file. For a consuming Swift package:
+Select **Exact Version: 1.1.0** to reproduce this release, then add the `CommonNetworkingKit` library product to your app target. Commit the app's `Package.resolved` file. For a consuming Swift package:
 
 ```swift
 // In Package.swift:
-.package(url: "https://github.com/Anurag-Chourasia/CommonNetworking.git", exact: "1.1.0")
+.package(url: "https://github.com/Anurag-Chourasia/CommonNetworkingKit.git", exact: "1.1.0")
 // In the consuming target's dependencies:
-.product(name: "CommonNetworking", package: "CommonNetworking")
+.product(name: "CommonNetworkingKit", package: "CommonNetworkingKit")
 ```
+
+> [!NOTE]
+> For backward compatibility, the `CommonNetworking` library product and module name are preserved as an alias.
 
 This is source distributed through Swift Package Manager, not a prebuilt binary XCFramework. No registry account or CocoaPods installation is needed. The library declares iOS 16.6 as its deployment floor. Host tests run on macOS as a validation technique; this is not a declaration of macOS platform support.
 
@@ -30,7 +33,7 @@ This is source distributed through Swift Package Manager, not a prebuilt binary 
 Build the request in the app that owns the endpoint and model. The package deliberately does not define application endpoints, DTOs, API envelopes, authentication, retries, or app-specific error mappings.
 
 ```swift
-import CommonNetworking
+import CommonNetworkingKit
 import Foundation
 
 struct Profile: Decodable {

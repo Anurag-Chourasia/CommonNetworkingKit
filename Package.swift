@@ -2,15 +2,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "CommonNetworking",
-    platforms: [.iOS("16.6")],
+    name: "CommonNetworkingKit",
+    platforms: [.iOS("16.6"), .macOS(.v14)],
     products: [
+        .library(name: "CommonNetworkingKit", targets: ["CommonNetworkingKit"]),
         .library(name: "CommonNetworking", targets: ["CommonNetworking"])
     ],
     dependencies: [],
     targets: [
-        .target(name: "CommonNetworking", dependencies: []),
-        .testTarget(name: "CommonNetworkingTests", dependencies: ["CommonNetworking"])
+        .target(
+            name: "CommonNetworkingKit",
+            dependencies: [],
+            path: "Sources/CommonNetworkingKit"
+        ),
+        .target(
+            name: "CommonNetworking",
+            dependencies: ["CommonNetworkingKit"],
+            path: "Sources/CommonNetworking"
+        ),
+        .testTarget(
+            name: "CommonNetworkingKitTests",
+            dependencies: ["CommonNetworkingKit"],
+            path: "Tests/CommonNetworkingKitTests"
+        )
     ],
     swiftLanguageVersions: [.v5]
 )
