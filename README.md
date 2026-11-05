@@ -170,3 +170,7 @@ Every pull request and push to `main` undergoes automated verification before me
    - Host target compilation with `-strict-concurrency=complete` and `-warnings-as-errors`.
    - Comprehensive unit tests executed with complete strict concurrency checking.
    - iOS Simulator product verification via `xcodebuild`.
+
+## Canonical module migration
+
+Use the `CommonNetworkingKit` product and `import CommonNetworkingKit`. The legacy `CommonNetworking` product and re-export target have been removed in this candidate and require a breaking release. Replace qualified references such as `CommonNetworking.HTTPClient` with `CommonNetworkingKit.HTTPClient` and update test-support manifests as well as app product references. Repository identity and Git URL do not change merely because the Swift module name changes.
