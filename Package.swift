@@ -5,8 +5,7 @@ let package = Package(
     name: "CommonNetworkingKit",
     platforms: [.iOS(.v16), .macOS(.v14)],
     products: [
-        .library(name: "CommonNetworkingKit", targets: ["CommonNetworkingKit"]),
-        .library(name: "CommonNetworking", targets: ["CommonNetworking"])
+        .library(name: "CommonNetworkingKit", targets: ["CommonNetworkingKit"])
     ],
     dependencies: [],
     targets: [
@@ -14,11 +13,6 @@ let package = Package(
             name: "CommonNetworkingKit",
             dependencies: [],
             path: "Sources/CommonNetworkingKit"
-        ),
-        .target(
-            name: "CommonNetworking",
-            dependencies: ["CommonNetworkingKit"],
-            path: "Sources/CommonNetworking"
         ),
         .testTarget(
             name: "CommonNetworkingKitTests",
