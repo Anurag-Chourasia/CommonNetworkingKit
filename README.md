@@ -1,176 +1,215 @@
 # CommonNetworkingKit
 
-A lightweight, Foundation-only Swift package providing a secure, concurrent HTTP transport layer and optional typed JSON decoding. Extracted and adapted from [Anurag Chourasia's MyTV and ShowBook apps](https://github.com/Anurag-Chourasia).
+A lightweight, Foundation-only Swift package providing a secure, concurrent HTTP transport layer, redacting telemetry, and typed JSON decoding for multi-app architectures.
 
 ![Platform](https://img.shields.io/badge/Platform-iOS%2016.0%2B%20%7C%20macOS%2014.0%2B-blue)
 ![Swift](https://img.shields.io/badge/Swift-6.0%2B-orange)
-![Toolchain](https://img.shields.io/badge/Xcode-27.0-purple)
+![Toolchain](https://img.shields.io/badge/Xcode-27.1-purple)
 ![CI](https://img.shields.io/badge/CI-Passing-brightgreen)
 ![SwiftLint](https://img.shields.io/badge/SwiftLint-0.65.1%20Strict-green)
+![Version](https://img.shields.io/badge/Release-v2.0.0-blueviolet)
+![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Pure%20Foundation)-success)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
 ---
 
-## Architecture
+## 1. Executive Summary & Purpose
+
+`CommonNetworkingKit` establishes an enterprise-grade, deterministic HTTP networking engine across **ShowBook**, **myTV**, and **Motivation Daily**. It replaces third-party dependencies with native Swift Concurrency (`async`/`await`) and injected `URLSession` instances.
+
+### Key Engineering Objectives:
+- **Clean Transport Abstraction**: `HTTPClientProtocol` provides a minimal interface separating raw HTTP transport (`send(_:)`) from typed model parsing (`request(_:as:decoder:)`).
+- **Deterministic Error Handling**: `HTTPClientError` explicitly classifies transport timeouts, non-2xx status codes (`unsuccessfulStatus`), and empty payloads (`emptyBody`), retaining the raw HTTP response for error diagnostics.
+- **Privacy-Preserving Telemetry**: `HTTPLogger` automatically redacts sensitive headers (e.g. `Authorization`, `Cookie`, `Set-Cookie`) and secret query parameters before logging.
+- **100% Deterministic Testing**: Injected `URLSession` allows mock `URLProtocol` handlers to simulate offline states, 429 rate-limits, and payload corruptions without network calls.
+
+---
+
+## 2. Architecture & Design Principles
 
 ```mermaid
 flowchart TD
-    Consumer["Consumer App / Feature Module (e.g. MyTV, ShowBook)"] -->|Builds URLRequest| Client["HTTPClient (Sendable)"]
-    Client -->|Optional Logging| Logger["HTTPLogger (Redacting & Chunked)"]
+    Consumer["Feature Service (Open Library / IPTV / Quotes API)"] -->|Builds URLRequest| Client["HTTPClient (Sendable)"]
+    Client -->|Optional Diagnostic Logging| Logger["HTTPLogger (Redacting & Chunked)"]
     Client -->|Delegates Transport| Session["URLSession (Injected / Ephemeral / Shared)"]
     Session -->|Data & Response| Client
-    Client -->|Success 2xx| Decoder["JSONDecoder (Typed) / Raw HTTPResponse"]
-    Client -->|Status / Transport Errors| ErrorHandling["HTTPClientError / URLError"]
+    Client -->|Success 2xx| Decoder["JSONDecoder (Typed Model Decoding)"]
+    Client -->|Raw Payload| HTTPResponse["HTTPResponse (Data, Headers, Status)"]
+    Client -->|Transport / Status Failures| ErrorHandling["HTTPClientError"]
 ```
 
-`CommonNetworkingKit` is architected with strict separation of concerns, zero external third-party dependencies, and pure Swift 6 concurrency compliance:
-
-1. **Transport Abstraction**:
-   - `HTTPClientProtocol`: Exposes `send(_ request: URLRequest) async throws -> HTTPResponse` and `request<T: Decodable>(_ request: URLRequest, as type: T.Type, decoder: JSONDecoder) async throws -> T`.
-   - `HTTPClient`: Thread-safe, `Sendable` implementation delegating work to an injected or default `URLSession`.
-2. **Deterministic Response Handling**:
-   - `HTTPResponse`: Retains immutable `data`, the full `HTTPURLResponse`, status code, and header fields without lossy conversion.
-   - `HTTPClientError`: Explicitly discriminates non-HTTP responses, unsuccessful status codes (`unsuccessfulStatus`), and empty payloads (`emptyBody`), retaining the underlying response for inspection.
-3. **Privacy-Preserving Diagnostics**:
-   - `HTTPLogger`: High-performance structured logger with UUID pairing, elapsed millisecond duration, and recursive case-insensitive sanitization for sensitive credentials, authorization tokens, cookies, passwords, and emails.
-4. **Swift 6 Concurrency & Actor Safety**:
-   - Built with `-strict-concurrency=complete`. All core types conform to `Sendable`. Decoders are instantiated freshly per call to prevent data races.
-
-> [!NOTE]
-> For backward compatibility, the `CommonNetworking` library product and module name are preserved as an alias.
+### Architectural Tenets:
+1. **Swift 6 Strict Concurrency**: All core networking interfaces, responses, and errors conform to `Sendable`. Decoders are instantiated per-call to eliminate data races.
+2. **Zero Third-Party Dependencies**: Built exclusively on Apple's `Foundation` SDK.
+3. **No Hidden State or Caches**: The client acts as a pure transport engine; cache lifecycles and persistence policies remain under caller ownership.
 
 ---
 
-## Use Cases
+## 3. Dependency Graph & Consumer Matrix
 
-- **Modern REST API Consumption**: Execute async HTTP calls and decode responses directly to Swift `Decodable` models without third-party frameworks like Alamofire.
-- **Micro-payloads & Status Code Inspection**: Consume non-JSON or status-only endpoints (e.g., `204 No Content`, Webhooks, binary image downloads) safely using the raw `send(_:)` pipeline.
-- **Enterprise-Grade Logging & Audit**: Opt-in diagnostic logging that guarantees no sensitive user authentication headers, query parameters, or payload keys are emitted to logs.
-- **100% Deterministic Unit Testing**: Inject `URLSession` with custom `URLProtocol` stubs to test network edge cases (offline state, rate-limiting, cancellation, server errors) without live network calls.
+| Direction | Package / Project | Responsibility |
+|---|---|---|
+| **Upstream Dependencies** | **FoundationKit** (`v0.2.0`) | Logging protocols and time measurement utilities. |
+| **Downstream Consumers** | **ShowBook** | Powers Open Library book search, work/edition details, and cover downloads. |
+| | **myTV** | Powers IPTV-org channel listings, stream verification, and broadcast categories. |
+| | **Motivation Daily** | Powers multi-provider quote fetching (`Quotable`, `ZenQuotes`, `AdviceSlip`). |
 
 ---
 
-## Practical Code Examples
+## 4. API Contracts & Practical Code Examples
 
-### 1. Typed JSON Request
-
+### 1. Typed Model Request with Error Handling
 ```swift
-import CommonNetworkingKit
 import Foundation
+import CommonNetworkingKit
 
-struct UserProfile: Decodable, Sendable {
-    let id: String
-    let name: String
-    let email: String
-}
+struct BookSearchService {
+    private let client: HTTPClientProtocol
 
-final class UserService {
-    private let client: HTTPClient
-
-    init(client: HTTPClient = HTTPClient()) {
+    init(client: HTTPClientProtocol = HTTPClient()) {
         self.client = client
     }
 
-    func fetchUserProfile(userId: String) async throws -> UserProfile {
-        guard let url = URL(string: "https://api.example.com/v1/users/\(userId)") else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+    func searchBooks(query: String) async throws -> SearchResultsDTO {
+        var components = URLComponents(string: "https://openlibrary.org/search.json")!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+
+        let request = URLRequest(url: components.url!)
         
-        return try await client.request(request, as: UserProfile.self)
+        do {
+            return try await client.request(request, as: SearchResultsDTO.self)
+        } catch let HTTPClientError.unsuccessfulStatus(status, response) {
+            print("Server returned HTTP \(status): \(response)")
+            throw BookServiceError.serverFailure(statusCode: status)
+        } catch {
+            throw BookServiceError.networkUnavailable
+        }
     }
 }
 ```
 
-### 2. Raw Response & Status Validation
-
-```swift
-func downloadAsset(from url: URL, using client: HTTPClient) async throws -> Data {
-    let request = URLRequest(url: url)
-    let response = try await client.send(request)
-    
-    guard (200..<300).contains(response.statusCode) else {
-        throw HTTPClientError.unsuccessfulStatus(response)
-    }
-    return response.data
-}
-```
-
-### 3. Diagnostic Logging with Custom Redactions
-
-```swift
-#if DEBUG
-let logger = HTTPLogger(
-    additionalSensitiveKeys: ["accountNumber", "ssn", "creditCardNumber"],
-    output: { logMessage in
-        print(logMessage)
-    }
-)
-let client = HTTPClient(logger: logger)
-#else
-let client = HTTPClient(logger: nil)
-#endif
-```
-
-### 4. Deterministic Unit Testing with URLProtocol
-
+### 2. Testing with Custom `URLProtocol` Stubs
 ```swift
 import XCTest
 import CommonNetworkingKit
 
-final class MockProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func startLoading() {
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"id":"123","name":"Anurag","email":"test@example.com"}"#.utf8))
-        client?.urlProtocolDidFinishLoading(self)
-    }
-    override func stopLoading() {}
-}
+final class NetworkTests: XCTestCase {
+    func testOfflineSimulation() async {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = HTTPClient(session: session)
 
-// In test method:
-let config = URLSessionConfiguration.ephemeral
-config.protocolClasses = [MockProtocol.self]
-let client = HTTPClient(session: URLSession(configuration: config))
+        MockURLProtocol.stubError = URLError(.notConnectedToInternet)
+
+        let request = URLRequest(url: URL(string: "https://api.example.com/data")!)
+        
+        do {
+            _ = try await client.send(request)
+            XCTFail("Expected failure")
+        } catch {
+            XCTAssertTrue(error is URLError)
+        }
+    }
+}
 ```
 
 ---
 
-## Release Version Controlling
+## 5. Verification & Testing
 
-`CommonNetworkingKit` strictly adheres to [Semantic Versioning (SemVer 2.0.0)](https://semver.org/spec/v2.0.0.html):
+```sh
+# Run networking client, redacting logger, and decoder tests
+swift test
 
-| Change Level | Policy | Tag Convention |
-| :--- | :--- | :--- |
-| **MAJOR** (`X.0.0`) | Breaking public API or behavior modifications | `vX.0.0` |
-| **MINOR** (`1.X.0`) | Backward-compatible features, new endpoints/helpers | `v1.X.0` |
-| **PATCH** (`1.1.X`) | Bug fixes, performance tuning, non-breaking fixes | `v1.1.X` |
-
-- **Release Tracking**: All modifications must be documented in [CHANGELOG.md](CHANGELOG.md).
-- **Tag Validation**: Release tags follow the `vX.Y.Z` format and are verified locally and in CI using `bash Scripts/verify-release-version.sh`.
-- **SPM Integration**:
-  ```swift
-  .package(url: "https://github.com/Anurag-Chourasia/CommonNetworkingKit.git", exact: "1.1.0")
-  ```
+# Validate swiftlint strict rules
+swiftlint lint --strict
+```
 
 ---
 
-## Quality & CI Verification
+## 6. End-to-End Ecosystem Connectivity
 
-Every pull request and push to `main` undergoes automated verification before merging:
+```mermaid
+graph TD
+    subgraph CoreServices ["Shared Core Services (SPMs)"]
+        FoundationKit["FoundationKit<br/>(System Clock, Unified Logging, Thread Safety)"]
+        LocalisationKit["LocalisationKit<br/>(Typed Strings, Pluralization, String Catalogs)"]
+        DesignTokensKit["DesignTokensKit<br/>(BrandPalettes, ColorTheme, Typography, Metrics, SF Symbols)"]
+        CommonNetworkingKit["CommonNetworkingKit<br/>(HTTPClient, URLSession, RequestBuilder, Interceptors)"]
+        AppStubData["AppStubData<br/>(Synthetic Fixtures, Offline Catalogs, Test Scenarios)"]
+    end
 
-1. **SwiftLint Gate**:
-   - Enforces the organization's pinned 24-rule quality policy (`.swiftlint.yml`, SwiftLint 0.65.1).
-   - Zero-tolerance strict mode (`--strict`, warnings treated as errors).
-   - Run locally: `bash Scripts/lint.sh`.
-2. **Build & Test Gate**:
-   - Host target compilation with `-strict-concurrency=complete` and `-warnings-as-errors`.
-   - Comprehensive unit tests executed with complete strict concurrency checking.
-   - iOS Simulator product verification via `xcodebuild`.
+    subgraph UIServices ["Shared Presentation & Auth (SPMs)"]
+        UIComponentsKit["UIComponentsKit<br/>(CatalogTile, SurfaceCard, StateMessage, Recipes)"]
+        AuthKit["AuthKit & AuthKitUI<br/>(SessionManager, AppAuthGate, AccountToolbarItem)"]
+        DeveloperProfileKit["DeveloperProfileKit<br/>(DeveloperProfileView, Runtime Overlays)"]
+        SnapshotTestingKit["SnapshotTestingKit<br/>(Subpixel Comparison, Golden Baseline Engine)"]
+    end
 
-## Canonical module migration
+    subgraph HostApps ["Host Applications"]
+        ShowBook["ShowBook<br/>(Book Discovery, Core Data Persistence, Open Library)"]
+        MyTV["myTV<br/>(IPTV Browser, AVPlayer Lifecycle, Directory Cache)"]
+        MotivationDaily["Motivation Daily<br/>(Card Feed, Quote Persistence, Image Export Studio)"]
+    end
 
-Use the `CommonNetworkingKit` product and `import CommonNetworkingKit`. The legacy `CommonNetworking` product and re-export target have been removed in this candidate and require a breaking release. Replace qualified references such as `CommonNetworking.HTTPClient` with `CommonNetworkingKit.HTTPClient` and update test-support manifests as well as app product references. Repository identity and Git URL do not change merely because the Swift module name changes.
+    subgraph QualityGates ["CI/CD Automation & Tooling"]
+        ArchitectureGuard["check_architecture.py<br/>(Boundary Enforcement, Zero Token Leakage)"]
+        SnapshotVerifier["verify-snapshot-baselines.py<br/>(Visual Regression Gate)"]
+        GHActions["GitHub Actions CI<br/>(Fast Lane, Smoke Lane, Release Build Verification)"]
+    end
+
+    %% Dependencies between Shared SPMs
+    DesignTokensKit --> UIComponentsKit
+    LocalisationKit --> UIComponentsKit
+    DesignTokensKit --> AuthKit
+    UIComponentsKit --> AuthKit
+    FoundationKit --> CommonNetworkingKit
+    DesignTokensKit --> DeveloperProfileKit
+    UIComponentsKit --> DeveloperProfileKit
+    LocalisationKit --> DeveloperProfileKit
+
+    %% Dependencies from Host Apps to Shared SPMs
+    DesignTokensKit --> ShowBook
+    UIComponentsKit --> ShowBook
+    AuthKit --> ShowBook
+    CommonNetworkingKit --> ShowBook
+    DeveloperProfileKit --> ShowBook
+    AppStubData --> ShowBook
+
+    DesignTokensKit --> MyTV
+    UIComponentsKit --> MyTV
+    AuthKit --> MyTV
+    CommonNetworkingKit --> MyTV
+    DeveloperProfileKit --> MyTV
+    AppStubData --> MyTV
+
+    DesignTokensKit --> MotivationDaily
+    UIComponentsKit --> MotivationDaily
+    AuthKit --> MotivationDaily
+    CommonNetworkingKit --> MotivationDaily
+    DeveloperProfileKit --> MotivationDaily
+    AppStubData --> MotivationDaily
+
+    %% Testing & Verification Linkage
+    SnapshotTestingKit -.-> ShowBook
+    SnapshotTestingKit -.-> MyTV
+    SnapshotTestingKit -.-> MotivationDaily
+
+    ArchitectureGuard --> HostApps
+    ArchitectureGuard --> CoreServices
+    ArchitectureGuard --> UIServices
+    SnapshotVerifier --> SnapshotTestingKit
+    GHActions --> HostApps
+    GHActions --> UIServices
+    GHActions --> CoreServices
+```
+
+---
+
+## 7. Canonical Notion Dashboards & Governance Links
+
+- [iOS Portfolio — Engineering Tickets Dashboard](https://app.notion.com/p/c20d7f4b133b44499c8ac0b4d5f6249e?pvs=204)
+- [iOS Portfolio — Master Document](https://app.notion.com/p/40ffa5f855b98192ad2ede66a5d36fe7)
+- [Architecture Boundary Validator (`check_architecture.py`)](file:///Users/anuragchourasia/Desktop/Projects/UIComponentsKit/Scripts/check_architecture.py)
+- [Release & Gate Policy Documentation (`Docs/MASTER.md`)](file:///Users/anuragchourasia/Desktop/Projects/Docs/MASTER.md)
