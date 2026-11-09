@@ -6,20 +6,29 @@ public protocol ImageDataFetching: Sendable {
     func fetchData(for url: URL) async throws -> Data
 }
 
-/// An actor that coordinates image data fetches and deduplicates in-flight requests for the same URL.
+/// An actor that coordinates image data fetches, checks cache, and deduplicates in-flight requests for identical URLs.
 public actor ImageDataFetcher: ImageDataFetching {
     private let client: HTTPClient
+    private let cache: (any ImageDataCaching)?
     private var inFlightTasks: [URL: Task<Data, Error>] = [:]
 
-    public init(client: HTTPClient = HTTPClient()) {
+    public init(
+        client: HTTPClient = HTTPClient(),
+        cache: (any ImageDataCaching)? = nil
+    ) {
         self.client = client
+        self.cache = cache
     }
 
-    public init(session: URLSession) {
+    public init(
+        session: URLSession,
+        cache: (any ImageDataCaching)? = nil
+    ) {
         self.client = HTTPClient(session: session)
+        self.cache = cache
     }
 
-    /// Fetches data for the given URL, deduplicating concurrent requests for identical URLs.
+    /// Fetches data for the given URL, checking cache first and deduplicating concurrent in-flight requests.
     public func fetchData(for url: URL) async throws -> Data {
         try Task.checkCancellation()
 
@@ -32,11 +41,15 @@ public actor ImageDataFetcher: ImageDataFetching {
             return data
         }
 
+        if let cached = await cache?.data(for: url) {
+            return cached
+        }
+
         if let existingTask = inFlightTasks[url] {
             return try await existingTask.value
         }
 
-        let task = Task<Data, Error> { [client] in
+        let task = Task<Data, Error> { [client, cache] in
             let request = URLRequest(url: url)
             let response = try await client.send(request)
             guard (200..<300).contains(response.statusCode) else {
@@ -45,6 +58,7 @@ public actor ImageDataFetcher: ImageDataFetching {
             guard !response.data.isEmpty else {
                 throw HTTPClientError.emptyBody(response)
             }
+            await cache?.store(response.data, for: url)
             return response.data
         }
 
