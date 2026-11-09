@@ -94,6 +94,18 @@ final class ImageDataCacheTests: XCTestCase {
         XCTAssertNil(retrieved2)
     }
 
+    func testCacheDefaultInitializer() async {
+        let cache = PersistentImageDataCache(diskDirectoryName: "CommonNetworkingKitTests_\(UUID().uuidString)")
+        guard let url = URL(string: "https://example.com/default_init.png") else { return XCTFail("Invalid URL") }
+        let sampleData = Data([0xDE, 0xAD, 0xBE, 0xEF])
+
+        await cache.store(sampleData, for: url)
+        let retrieved = await cache.data(for: url)
+        XCTAssertEqual(retrieved, sampleData)
+
+        await cache.clear()
+    }
+
     func testImageDataFetcherReturnsCachedDataWithoutNetworkRequest() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CacheStubProtocol.self]

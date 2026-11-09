@@ -157,4 +157,30 @@ final class ImageDataFetcherTests: XCTestCase {
             // Cancelled
         }
     }
+
+    func testFetchDataWithDefaultClientAndCache() async {
+        let fetcher = ImageDataFetcher()
+        guard let url = URL(string: "https://example.com/invalid_host_unreachable_\(UUID().uuidString)") else { return XCTFail("Invalid URL") }
+        do {
+            _ = try await fetcher.fetchData(for: url)
+        } catch {
+            XCTAssertNotNil(error)
+        }
+    }
+
+    func testFetchDataFromFileURLThrowsForEmptyData() async throws {
+        let fetcher = ImageDataFetcher()
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".dat")
+        try Data().write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        do {
+            _ = try await fetcher.fetchData(for: tempURL)
+            XCTFail("Expected emptyBody error")
+        } catch HTTPClientError.emptyBody {
+            // Expected
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
 }

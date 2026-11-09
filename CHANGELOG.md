@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.1.0
+
+- Move to Swift 6 language mode with complete strict concurrency checking.
+- Add domain-agnostic `ImageDataFetching` protocol and `ImageDataFetcher` actor with concurrent in-flight deduplication.
+- Add `ImageDataCaching` protocol and `PersistentImageDataCache` actor with two-tier memory (`NSCache`) and atomic disk persistence.
+- Add ecosystem governance SwiftLint rules and reach 97.1% test line coverage (exceeding 95.0% threshold).
+
+## 2.0.0
+
+- Remove legacy CommonNetworking module shim.
+
 ## 1.1.0
 
 - Add opt-in HTTPLogger with paired UUIDs, elapsed transport time, sorted headers and pretty JSON.

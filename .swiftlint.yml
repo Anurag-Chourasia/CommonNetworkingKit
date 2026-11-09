@@ -29,5 +29,49 @@ only_rules:
   - trailing_whitespace
   - vertical_whitespace
   - void_return
+  - custom_rules
 strict: true
 reporter: xcode
+
+custom_rules:
+  # 1. Ban raw strings in Views (mandates KeyPath or L10n)
+  ban_hardcoded_view_strings:
+    name: "Hardcoded String in View"
+    regex: 'Text\(\s*"[^"]+"\s*\)'
+    message: "Hardcoded strings are forbidden. Use Text(\\.keyPath) with LocalisationKit."
+    severity: error
+    included: ".*/Presentation/.*"
+
+  # 2. Ban magic padding literals (mandates KeyPath: .padding(\.medium) or .padding(\.s8))
+  ban_hardcoded_padding:
+    name: "Hardcoded Padding Literal"
+    regex: '\.padding\(\s*((\.[a-zA-Z]+,\s*)?[0-9]+(\.[0-9]+)?)\s*\)'
+    message: "Magic padding values are forbidden. Use .padding(\\.medium) or .padding(\\.s8)."
+    severity: error
+    included: ".*/Presentation/.*"
+
+  # 3. Ban magic corner radius literals (mandates KeyPath: .cornerRadius(\.cardRadius))
+  ban_hardcoded_corner_radius:
+    name: "Hardcoded Corner Radius"
+    regex: '\.cornerRadius\(\s*[0-9]+(\.[0-9]+)?\s*\)'
+    message: "Magic corner radii are forbidden. Use .cornerRadius(\\.cardRadius) or .cornerRadius(\\.r12)."
+    severity: error
+    included: ".*/Presentation/.*"
+
+  # 4. Ban direct Supabase import in host apps
+  ban_direct_supabase_import:
+    name: "Direct Supabase Import Banned"
+    regex: 'import\s+Supabase'
+    message: "Direct Supabase import is banned. Use AuthKit instead."
+    severity: error
+    excluded: ".*/AuthKitSupabase/.*"
+
+  # 5. Ban UI imports in Domain & Data
+  ban_ui_in_domain_and_data:
+    name: "UI Framework in Domain or Data"
+    regex: 'import\s+(SwiftUI|UIKit|AppKit)'
+    message: "Domain and Data layers must never import UI frameworks."
+    severity: error
+    included:
+      - ".*/Domain/.*"
+      - ".*/Data/.*"

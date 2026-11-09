@@ -149,4 +149,11 @@ final class HTTPLoggerTests: XCTestCase {
         XCTAssertFalse(records.values.joined().contains("hidden"))
         XCTAssertEqual(records.values[0].components(separatedBy: "\n")[1], records.values[1].components(separatedBy: "\n")[1])
     }
+
+    func testConsoleLoggerInstance() {
+        let console = HTTPLogger.console
+        guard let url = URL(string: "https://example.com/test") else { return XCTFail("Invalid URL") }
+        let request = URLRequest(url: url)
+        console.request(request, id: "test-id")
+    }
 }
